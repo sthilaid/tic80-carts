@@ -1,8 +1,6 @@
-;; title:   game title
-;; author:  game developer, email, etc.
-;; desc:    short description
-;; site:    website link
-;; license: MIT License (change this to your license of choice)
+;; title:   platformer demo
+;; author:  sthilaid
+;; license: MIT License
 ;; version: 0.1
 ;; script:  scheme
 
@@ -96,52 +94,72 @@
     (cond ((is-ground-state? state)    (update-ground))
           ((is-air-state? state)       (update-inair)))))
 
-(define (detect-collision min max flag)
-  (let ((xmin (vec-x min)) (xmax (vec-x max)) (ymin (vec-y min)) (ymax (vec-y max)))
+(define (detect-collision minpos maxpos flag)
+  (let ((xmin (vec-x minpos)) (xmax (vec-x maxpos)) (ymin (vec-y minpos)) (ymax (vec-y maxpos)))
     (let loop ((x xmin) (y ymin))
       (cond ((> y ymax) #f)
             ((let* ((mx (floor (/ x 8)))
                     (my (floor (/ y 8)))
                     (tile (t80::mget mx my))
                     (coll? (t80::fget tile flag)))
-               (trace-sexp `(x ,x y ,y mx ,mx my ,my tile ,tile coll ,coll?))
+               ;;(trace-sexp `(x ,x y ,y mx ,mx my ,my tile ,tile coll ,coll?))
                coll?)
-             (if (= x xmin) (make-vec x (- y 8)) (make-vec (- x 8) y)))
+             (make-vec x y))
             ((< x xmax) (loop (+ x 1) y))
             (else (loop xmin (+ y 1)))))))
 
+(define (get-collision-best-pos coll pos vel)
+  (if (not coll)
+      pos
+      (let* ((vx (vec-x vel))
+             (vy (vec-y vel))
+             (x (cond ((< (abs vx) 0.0001)  (vec-x pos))
+                      ((< vx 0)             (+ (vec-x coll) 1))
+                      (else                 (- (vec-x coll) 8))))
+             (y (cond ((< (abs vy) 0.0001)  (vec-y pos))
+                      ((< vy 0)             (+ (vec-y coll) 1))
+                      (else                 (- (vec-y coll) 8)))))
+        (make-vec x y))))
+
 (define (update-ground)
-  (t80::trace (format #f "~S" `(update-ground)))
+  ;;(t80::trace (format #f "~S" `(update-ground)))
   (let ((pos (player-pos p))
         (vel (player-vel p)))
     (cond ((> (abs (vec-x vel)) 0)
            (begin (player-set-state! p pstate::run)
                   (let* ((nextpos (vec+ pos (make-vec (vec-x vel) 0.0)))
-                         (coll (detect-collision nextpos (vec+ nextpos 7) collision-flag)))
-                    (vec-set-x! pos (vec-x (if coll coll nextpos))))
+                         (coll? (detect-collision nextpos (vec+ nextpos 7) collision-flag)))
+                    (cond ((not coll?)      (vec-set-x! pos (vec-x nextpos)))
+                          (else             (vec-set-x! pos (vec-x (get-collision-best-pos coll? nextpos vel))))))
                   (player-set-dir! p (if (< (vec-x vel) 0) dir::left dir::right))))
           (#t
            (player-set-state! p pstate::idle)))
 
-    (t80::trace "-- before end of update-ground")
+    ;;(t80::trace "-- before end of update-ground")
     (let ((groundpos (vec+ pos (make-vec 0 1))))
       (if (not (detect-collision groundpos (vec+ groundpos 7) collision-flag))
           (player-set-state! p pstate::inair)
           (vec-set-y! vel 0.0)))
-    (t80::trace "-- end of update-ground")
+    ;;(t80::trace "-- end of update-ground")
     ))
 
 (define (update-inair)
   (let ((pos (player-pos p))
         (vel (player-vel p)))
     (vec-set-y! vel (+ (vec-y vel) gravity))
-    (let* ((nextpos (vec+ pos vel))
-           (coll? (detect-collision nextpos (vec+ nextpos 7) collision-flag)))
-      (if coll?
-          (begin (player-set-pos! p coll?)
-                 (if (> (vec-y vel) 0)
-                     (player-set-state! p pstate::idle)))
-          (player-set-pos! p nextpos)))))
+    (let* ((vx-vel (make-vec (vec-x vel) 0))
+           (vy-vel (make-vec 0 (vec-y vel)))
+           (pos+dx (vec+ pos vx-vel))
+           (coll-x (detect-collision pos+dx (vec+ pos+dx 7) collision-flag))
+           (pos+dx-fixed (get-collision-best-pos coll-x pos+dx vx-vel))
+           (pos+dxy (vec+ pos+dx-fixed vy-vel))
+           (coll-xy (detect-collision pos+dxy (vec+ pos+dxy 7) collision-flag))
+           (finalpos (get-collision-best-pos coll-xy pos+dxy vy-vel)))
+      (trace-sexp `(p: ,pos pdx: ,pos+dx cx: ,coll-x pdxf: ,pos+dx-fixed pdxy: ,pos+dxy cxy: ,coll-xy final: ,finalpos))
+      (player-set-pos! p finalpos)
+      (if (and (> (vec-y vel) 0)
+             (or coll-x coll-xy))
+        (player-set-state! p pstate::idle)))))
 
 ;;-----------------------------------------------------------------------------
 ;; Draw
@@ -172,7 +190,7 @@
     (t80::map x y w h sx sy)))
 
 (define (draw)
-  (t80::trace (format #f "~S" `(draw)))
+  ;;(t80::trace (format #f "~S" `(draw)))
   (t80::cls 0)
   (draw-level)
   (draw-player)
