@@ -386,9 +386,10 @@
          (bgx (floor (/ (- px player-cam-x-offset) bg-parallax)))
          (bgsx (- (floor (lerp (rescale (modulo (- px player-cam-x-offset) bg-parallax) 0 bg-parallax) 0 8))))
          (bg-ratio (rescale (modulo bgx w) 0 w))
-         
+         (bgw (floor (* w (- 1.0 bg-ratio))))
          (map-transparent 0) (bg-transparent 2))
-    (t80::map bgx bg-start w h bgsx sy bg-transparent)
+    (t80::map bgx bg-start bgw h bgsx sy bg-transparent)
+    (t80::map (modulo (+ bgx bgw) w) bg-start (- w bgw) h (+ bgsx (* bgw 8)) sy bg-transparent)
     (t80::map x y w h sx sy map-transparent)))
 
 (define (draw)
