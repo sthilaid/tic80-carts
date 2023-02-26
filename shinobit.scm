@@ -33,6 +33,17 @@
       (begin (set! debug-break-once-list (cons id debug-break-once-list))
              (break))))
 
+(define (swap-palette-color current-color new-color)
+  (let ((palette-map-addr #x3FF0))
+    (t80::poke4 (+ (* palette-map-addr 2) current-color) new-color)))
+
+(define-macro (with-palette-swaps swaps . body)
+  `(begin ,@(map (lambda (color-swap-el) `(swap-palette-color ,(car color-swap-el) ,(cadr color-swap-el)))
+                 swaps)
+          ,@body
+          ,@(map (lambda (color-swap-el) `(swap-palette-color ,(car color-swap-el) ,(car color-swap-el)))
+                 swaps)))
+
 ;;-----------------------------------------------------------------------------
 ;; Vec
 
@@ -58,7 +69,7 @@
 ;; Save Point
 
 (enum spoint-state idle active)
-(defstruct savepoint pos state)
+(defstruct savepoint pos (state spoint-state::idle))
 
 ;;-----------------------------------------------------------------------------
 ;; Contants
@@ -74,7 +85,6 @@
 (define-constant palette-size (* 16 3))
 (define-constant palette-addr #x3FC0)
 (define-constant right-slope-tile 3)
-(define-constant save-points (list (make-savepoint (make-vec (* 8 63) (* 8 14)) spoint-state::idle)))
 
 (flags sflag collision slope)
 
@@ -82,6 +92,9 @@
 ;; Globals
 
 (define p (make-player (make-vec) (make-vec) dir::right pstate::idle))
+(define save-points (list (make-savepoint (make-vec (* 8 9) (* 8 7)))
+                          (make-savepoint (make-vec (* 8 63) (* 8 14)))))
+
 (define t 0)
 
 ;;-----------------------------------------------------------------------------
@@ -164,6 +177,12 @@
             ((< dx 8) (loop (+ dx 1) dy))
             (else (loop 0 (+ dy 1)))))))
 
+(define (intersect-rect? a-min a-max b-min b-max)
+  (and (<= (vec-x b-min) (vec-x a-max))
+       (<= (vec-y b-min) (vec-y a-max))
+       (>= (vec-x b-max) (vec-x a-min))
+       (>= (vec-y b-max) (vec-y a-min))))
+
 ;; (define (intersect-with-flag minpos maxpos flag)
 ;;   (let ((min-x (vec-x minpos)) (min-y (vec-y minpos))
 ;;         (max-x (vec-x maxpos)) (max-y (vec-y maxpos)))
@@ -177,9 +196,13 @@
 ;; init
 
 (define (restart-level)
-  (vec-set-x! (player-pos p) 12)
-  (vec-set-y! (player-pos p) 100)
-  (change-state pstate::inair))
+  (let ((start-pos (let loop ((sp save-points))
+                     (cond ((null? sp) (make-vec 12 100))
+                           ((eq? (savepoint-state (car sp)) spoint-state::active) (vec+ (savepoint-pos (car sp)) (make-vec 0 (- 10))))
+                           (else (loop (cdr sp)))))))
+    (vec-set-x! (player-pos p) (vec-x start-pos))
+    (vec-set-y! (player-pos p) (vec-y start-pos))
+    (change-state pstate::inair)))
 
 ;;-----------------------------------------------------------------------------
 ;; player update
@@ -209,7 +232,10 @@
                           (state (player-state p)))
                       (and (or (is-ground-state? state)
                                (eq? state pstate::slope))
-                           (not (check-flag (vec+ pos (make-vec 4 (- 4))) sflag::collision)))))
+                           (not (detect-collision pos
+                                                  (vec+ pos (make-vec 0 (- 1)))
+                                                  (vec+ pos (make-vec 8 (- 1)))
+                                                  sflag::collision)))))
 (define (can-wall-jump?)
   (eq? (player-state p) pstate::wallslide))
 
@@ -349,10 +375,15 @@
                               (change-state pstate::slope)))))))
 
 (define (update-dynamic-collisions)
-  ;; (let ((pos (player-pos p)))
-  ;;     (for-each (lambda (spoint) (let ((coll? (detect-collision )))))
-  ;;               save-points))
-  'toto
+  (let* ((pos (player-pos p))
+         (pmin pos) (pmax (vec+ pos 7)))
+      (for-each (lambda (spoint) (let* ((sp-pos (savepoint-pos spoint))
+                                        (coll? (intersect-rect? pmin pmax sp-pos (vec+ sp-pos 7))))
+                                   (if coll?
+                                       (begin
+                                         (for-each (lambda (x) (savepoint-set-state! x spoint-state::idle)) save-points)
+                                         (savepoint-set-state! spoint spoint-state::active)))))
+                save-points))
   )
 
 ;;-----------------------------------------------------------------------------
@@ -422,7 +453,13 @@
          (is-visible? (and (>= (vec-x screen-pos) 0)
                            (<= (vec-x screen-pos) 248))))
     (if is-visible?
-        (t80::spr (get-animspr 60 352 353) (vec-x screen-pos) (vec-y screen-pos) tr scale))))
+        (case (savepoint-state spoint)
+          ((spoint-state::idle)
+           (let ((sprite (get-animspr 45 352 353 354 353)))
+             (t80::spr sprite (vec-x screen-pos) (vec-y screen-pos) tr scale)))
+          ((spoint-state::active)
+           (with-palette-swaps ((14 2) (13 3))
+                               (t80::spr 353 (vec-x screen-pos) (vec-y screen-pos) tr scale)))))))
 
 (define (draw-objects)
   (for-each draw-save-point save-points))
@@ -495,8 +532,9 @@
 ;; 008:0002880000028900000222000000880000008800000088000000880000009900
 ;; 009:0000880000009808008022080008888000008820000088200000808900009000
 ;; 010:0008800008089000082228000288808000088800000098800000008800000009
-;; 096:0000000000000000000ee00000edde0000eede00000ee0000000000000000000
-;; 097:000000000000000000000000000ee00000eede0000eeee00000ee00000000000
+;; 096:00000000000ee00000eede0000eeee00000ee000000000000000000000000000
+;; 097:0000000000000000000ee00000edde0000eeee00000ee0000000000000000000
+;; 098:000000000000000000000000000ee00000edde0000eede00000ee00000000000
 ;; </SPRITES>
 
 ;; <MAP>
@@ -547,7 +585,7 @@
 
 ;; <FLAGS>
 ;; 000:00101020200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-;; 001:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+;; 001:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008080800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 ;; </FLAGS>
 
 ;; <PALETTE>
