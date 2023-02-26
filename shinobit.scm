@@ -234,7 +234,7 @@
                                (eq? state pstate::slope))
                            (not (detect-collision pos
                                                   (vec+ pos (make-vec 0 (- 1)))
-                                                  (vec+ pos (make-vec 8 (- 1)))
+                                                  (vec+ pos (make-vec 7 (- 1)))
                                                   sflag::collision)))))
 (define (can-wall-jump?)
   (eq? (player-state p) pstate::wallslide))
